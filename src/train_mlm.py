@@ -23,7 +23,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--train_csv", type=str, required=True)
     parser.add_argument("--tokenizer_name", type=str, default="aaronfeller/PeptideMTR_sm")
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--output_dir", type=str, default="checkpoints")
