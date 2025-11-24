@@ -1,11 +1,36 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchtune.modules import RotaryPositionalEmbeddings
 from transformers import PreTrainedModel
 from .config import model_config
 from typing import Mapping
 from transformers.tokenization_utils_base import BatchEncoding
+from transformers import PretrainedConfig
+
+class model_config(PretrainedConfig):
+    model_type = "MLM_model"
+    def __init__(
+        self,
+        ffn_hidden_dim = 2048,
+        embed_dim = 1024,
+        num_heads = 16,
+        num_blocks = 32,
+        vocab_size = 405,
+        output_dim = 405,
+        max_seq_len = 2048,
+        size = "large",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.ffn_hidden_dim = ffn_hidden_dim
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.num_blocks = num_blocks
+        self.vocab_size = vocab_size
+        self.output_dim = output_dim
+        self.max_seq_len = max_seq_len
+        self.size = size
+
 
 class SwiGLU(nn.Module):
     def __init__(self, input_dim, hidden_dim):
@@ -20,6 +45,59 @@ class SwiGLU(nn.Module):
         return self.dropout(output)
 
 
+class RotaryPositionalEmbeddingsCustom(nn.Module):
+    def __init__(self, dim: int, max_seq_len: int = 2048, base: int = 10000):
+        """
+        Rotary positional embeddings (RoPE) implemented as described in RoFormer and modern models.
+        dim: dimension of each head (head_dim)
+        max_seq_len: maximum sequence length to cache
+        base: the base for the geometric progression
+        """
+        super().__init__()
+        self.dim = dim
+        self.base = base
+        self.max_seq_len = max_seq_len
+        # build theta for pairs
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        # precompute position embeddings
+        self._build_cache(max_seq_len)
+
+    def _build_cache(self, seq_len: int):
+        # seq positions
+        t = torch.arange(seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim/2)
+        # produce cos and sin
+        emb = torch.stack((freqs, freqs), dim=-1)  # (seq_len, dim/2, 2)
+        cos = emb[..., 0].cos()
+        sin = emb[..., 1].sin()
+        # reshape to (seq_len, 1, 1, dim) for broadcasting
+        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1).unsqueeze(1)
+        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1).unsqueeze(1)
+        self.register_buffer("cos_cached", cos)
+        self.register_buffer("sin_cached", sin)
+
+    def forward(self, x: torch.Tensor, input_pos: torch.Tensor = None) -> torch.Tensor:
+        """
+        x: shape (batch_size, seq_len, num_heads, head_dim)
+        input_pos: optional tensor of positions (seq_len) if not uniform 0..T-1
+        """
+        b, seq_len, num_heads, head_dim = x.shape
+        if seq_len > self.max_seq_len:
+            # rebuild
+            self._build_cache(seq_len)
+
+        cos = self.cos_cached[:seq_len]
+        sin = self.sin_cached[:seq_len]
+
+        # rotate
+        x_ = x.view(b, seq_len, num_heads, head_dim//2, 2)
+        x1, x2 = x_[..., 0], x_[..., 1]
+        x_rotated = torch.stack([x1 * cos - x2 * sin,
+                                 x2 * cos + x1 * sin], dim=-1)
+        x_rotated = x_rotated.flatten(-2)
+        return x_rotated
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, max_seq_len):
         super().__init__()
@@ -28,7 +106,7 @@ class MultiHeadAttention(nn.Module):
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
         self.qkv_proj = nn.Linear(embed_dim, embed_dim * 3, bias=False)
-        self.rotary = RotaryPositionalEmbeddings(dim=self.head_dim, max_seq_len=max_seq_len)
+        self.rotary = RotaryPositionalEmbeddingsCustom(dim=self.head_dim, max_seq_len=max_seq_len)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.dropout = nn.Dropout(0.1)  # Add dropout for regularization
 
