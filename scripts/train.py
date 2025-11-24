@@ -9,39 +9,29 @@ import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from lightning.pytorch.profilers import SimpleProfiler
+from pytorch_lightning.pytorch.profilers import SimpleProfiler
 from torchvision.transforms import Compose
-from transformers import AutoTokenizer#, RobertaForMaskedLM, RobertaConfig
-from roformer import RoFormerForMaskedLM, RoFormerConfig
+from transformers import AutoTokenizer, DataCollatorWithPadding #, RobertaForMaskedLM, RobertaConfig
 
 # Import local functions and classes
-from functions.data_funcs import * # import functions.data_funcs as dfunc
-from models.my_model import *
-from dataloader.dataloader import *
+from model.model import model_config, MLM_model
 
-torch.cuda.empty_cache()
-
-# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-# print('Cuda available: ', torch.cuda.is_available())
-# print('PyTorch version is: ', torch.__version__)
 
 # Define the main function
 def main():
-    # set up arguments ##############################################################
-    parser = argparse.ArgumentParser(description='Train a Transformer model on a peptide dataset')
-    parser.add_argument('-d', '--directory', type=str, required=True, 
-                        help='Directory name.')
-    args = parser.parse_args()
     
     # Load Tokenizer ####################################################################
     print("Loading tokenizer...")
 
-    tokenizer = AutoTokenizer.from_pretrained("aaronfeller/PeptideMTR_tokenizerOnly",
-                                              pad_sequence_length=max_length, padding_side='right', 
-                                              truncation=True, max_length=2048, 
-                                              return_tensors='pt')
-
+    tokenizer = AutoTokenizer.from_pretrained(
+        "aaronfeller/PeptideMTR_sm",
+        padding=False,                # don’t pad now
+        truncation=True,              # allow truncation
+        max_length=2048               # optional cap
+    )
+    
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=None)
+    
     # Data loader ###############################################################
     csv_file = '../data/'
     composed = Compose([SMILES_to_input(tokenizer)])
@@ -57,25 +47,21 @@ def main():
     
     # Model parameters ###############################################################
     
-    config = RoFormerConfig(
-        vocab_size=tokenizer.vocab_size,
-        max_position_embeddings=514,
-        num_hidden_layers=6,
-        num_attention_heads=12,
-        hidden_size=768,
-        type_vocab_size=2,
-        pad_token_id=tokenizer.pad_token_id,
-        is_decoder=False,
-    )
+    config = model_config    
+    model = MLM_model(config=config)
     
-    model = RoFormerForMaskedLM(config=config)
-    model = reset_parameters(model)
+    # initialize to best practices
+    def initialize_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+        for param in model.parameters():
+            if param.dim() > 1:
+                nn.init.xavier_uniform_(param)
+            else:
+                nn.init.zeros_(param)
+
+    initialize_parameters(model)
     
-    # Count model parameters
-    print(f"Number of parameters: {count_parameters(model)/1e6:.2f}M")
-    
-    pepLM_model = pepLM(model) # , vocab_size)
-    
+
     # Training ###############################################################
     print("Training model...")
     print("Current Time =", datetime.datetime.now().strftime("%H:%M:%S"))
