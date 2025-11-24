@@ -34,6 +34,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
     pad_token_id = tokenizer.pad_token_id
+    mask_token_id = tokenizer.mask_token_id
 
     dataset = SequenceDataset(args.train_csv, args.tokenizer_name)
 
@@ -64,16 +65,18 @@ def main():
     for epoch in range(args.epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)
+
         model.train()
         for batch in loader:
             ids = batch["input_ids"].to(device)
             mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
 
             outputs = model(input_ids=ids, attention_mask=mask)
             logits = outputs["logits"]
 
             # build your MLM loss here (masked LM, etc.)
-            loss = compute_mlm_loss(logits, ids, pad_token_id)
+            loss = compute_mlm_loss(logits, labels, pad_token_id)
 
             optimizer.zero_grad()
             loss.backward()
