@@ -195,15 +195,15 @@ class MLM_core(nn.Module):
         # print(f"logits shape: {logits.shape}")  # Debugging line to check the shape of logits
 
         # mean pool but remove positions that have pad tokens
-        mean_pool = x.masked_fill(ids.unsqueeze(-1) == pad_token_id, 0).mean(dim=1)
+        # mean_pool = x.masked_fill(ids.unsqueeze(-1) == pad_token_id, 0).mean(dim=1)
 
-        outputs = {
-            'logits': logits,
-            'last_layer': x,
-            'mean_pool': mean_pool
-        }
+        # outputs = {
+        #     'logits': logits,
+        #     'last_layer': x,
+        #     'mean_pool': mean_pool
+        # }
 
-        return outputs
+        return logits
 
 class MLM_model(PreTrainedModel): # HF-facing class name
     config_class = model_config
