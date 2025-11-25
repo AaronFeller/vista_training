@@ -33,14 +33,13 @@ def main():
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=None)
     
     # Data loader ###############################################################
-    csv_file = '../data/'
     composed = Compose([SMILES_to_input(tokenizer)])
     
-    dataset = SMILES_Dataset(csv_file, transform=composed)
-    
-    train_size = int(0.95 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    train_file = '../data/train/train_smiles.parquet'
+    train_dataset = SMILES_Dataset(train_file, transform=composed)
+
+    val_file = '../data/test/test_smiles.parquet'
+    val_dataset = SMILES_Dataset(val_file, transform=composed)
     
     train_loader = DataLoader(train_dataset, num_workers=8, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_dataset, num_workers=8, batch_size=64, shuffle=False)

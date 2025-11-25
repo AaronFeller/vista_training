@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PreTrainedModel
-from .config import model_config
 from typing import Mapping
 from transformers.tokenization_utils_base import BatchEncoding
 from transformers import PretrainedConfig
@@ -44,59 +43,110 @@ class SwiGLU(nn.Module):
         output = self.linear2(F.silu(x1) * x2)
         return self.dropout(output)
 
-
 class RotaryPositionalEmbeddingsCustom(nn.Module):
-    def __init__(self, dim: int, max_seq_len: int = 2048, base: int = 10000):
-        """
-        Rotary positional embeddings (RoPE) implemented as described in RoFormer and modern models.
-        dim: dimension of each head (head_dim)
-        max_seq_len: maximum sequence length to cache
-        base: the base for the geometric progression
-        """
+    def __init__(self, head_dim: int, max_seq_len: int = 2048, base: int = 10000):
         super().__init__()
-        self.dim = dim
+        assert head_dim % 2 == 0, "Head dimension must be even for RoPE pairs"
+        self.head_dim = head_dim
         self.base = base
         self.max_seq_len = max_seq_len
-        # build theta for pairs
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, dim, 2).float() / dim))
+
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, head_dim, 2).float() / head_dim))
         self.register_buffer("inv_freq", inv_freq)
-        # precompute position embeddings
+
         self._build_cache(max_seq_len)
 
     def _build_cache(self, seq_len: int):
-        # seq positions
         t = torch.arange(seq_len, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, dim/2)
-        # produce cos and sin
-        emb = torch.stack((freqs, freqs), dim=-1)  # (seq_len, dim/2, 2)
-        cos = emb[..., 0].cos()
-        sin = emb[..., 1].sin()
-        # reshape to (seq_len, 1, 1, dim) for broadcasting
-        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1).unsqueeze(1)
-        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1).unsqueeze(1)
-        self.register_buffer("cos_cached", cos)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, head_dim//2)
+
+        cos = freqs.cos().unsqueeze(0).unsqueeze(2)  # ⇒ (1, seq_len, 1, head_dim//2)
+        sin = freqs.sin().unsqueeze(0).unsqueeze(2)
+
+        # Register buffers
+        self.register_buffer("cos_cached", cos)  # (1, max_seq_len, 1, head_dim//2)
         self.register_buffer("sin_cached", sin)
 
+        self.max_seq_len = seq_len
+
     def forward(self, x: torch.Tensor, input_pos: torch.Tensor = None) -> torch.Tensor:
-        """
-        x: shape (batch_size, seq_len, num_heads, head_dim)
-        input_pos: optional tensor of positions (seq_len) if not uniform 0..T-1
-        """
-        b, seq_len, num_heads, head_dim = x.shape
+        # x: (B, seq_len, num_heads, head_dim)
+        B, seq_len, num_heads, head_dim = x.shape
+        assert head_dim == self.head_dim, f"Head dim mismatch {head_dim} vs {self.head_dim}"
+
         if seq_len > self.max_seq_len:
-            # rebuild
             self._build_cache(seq_len)
 
-        cos = self.cos_cached[:seq_len]
-        sin = self.sin_cached[:seq_len]
+        cos = self.cos_cached[:, :seq_len]   # (1, seq_len, 1, head_dim//2)
+        sin = self.sin_cached[:, :seq_len]
 
-        # rotate
-        x_ = x.view(b, seq_len, num_heads, head_dim//2, 2)
-        x1, x2 = x_[..., 0], x_[..., 1]
-        x_rotated = torch.stack([x1 * cos - x2 * sin,
-                                 x2 * cos + x1 * sin], dim=-1)
-        x_rotated = x_rotated.flatten(-2)
-        return x_rotated
+        # split pairs
+        x = x.view(B, seq_len, num_heads, head_dim//2, 2)
+        x1, x2 = x[..., 0], x[..., 1]  # both (B, seq_len, num_heads, head_dim//2)
+
+        # apply rotation
+        x_rotated = torch.stack([
+            x1 * cos - x2 * sin,
+            x2 * cos + x1 * sin
+        ], dim=-1)  # (B, seq_len, num_heads, head_dim//2, 2)
+
+        return x_rotated.flatten(-2)  # (B, seq_len, num_heads, head_dim)
+
+
+class UnifiedTransformerBlock(nn.Module):
+    def __init__(self, embed_dim, num_heads, ffn_hidden_dim, max_seq_len):
+        super().__init__()
+        self.attn_norm = nn.LayerNorm(embed_dim)
+        self.attn = MultiHeadAttention(embed_dim, num_heads, max_seq_len)
+        self.ffn_norm = nn.LayerNorm(embed_dim)
+        self.ffn = SwiGLU(embed_dim, ffn_hidden_dim)
+
+    def forward(self, x, input_pos=None, mask=None):
+        x = x + self.attn(self.attn_norm(x), input_pos=input_pos, mask=mask)
+        x = x + self.ffn(self.ffn_norm(x))
+        return x
+
+class TransformerStack(nn.Module):
+    def __init__(self, num_blocks, embed_dim, num_heads, ffn_hidden_dim, max_seq_len):
+        super().__init__()
+        self.blocks = nn.ModuleList([
+            UnifiedTransformerBlock(embed_dim, num_heads, ffn_hidden_dim, max_seq_len)
+            for _ in range(num_blocks)
+        ])
+        self.norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, x, input_pos=None, mask=None):
+        for block in self.blocks:
+            x = block(x, input_pos=input_pos, mask=mask)
+        return self.norm(x)
+
+
+class MLM_model(PreTrainedModel): # HF-facing class name
+    config_class = model_config
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.model = MLM_core(
+            vocab_size=config.vocab_size,
+            embed_dim=config.embed_dim,
+            num_blocks=config.num_blocks,
+            num_heads=config.num_heads,
+            ffn_hidden_dim=config.ffn_hidden_dim,
+            output_dim=config.output_dim,
+            max_seq_len=config.max_seq_len,
+        )
+        self.post_init()  # Initialize weights and apply final processing
+    
+    # if inputs are dictionary
+    def forward(self, x=None, **kwargs):
+        if isinstance(x, (BatchEncoding, Mapping)):
+            return self.model(x.get("input_ids"), mask=x.get("attention_mask"))
+        
+        if "input_ids" in kwargs or "attention_mask" in kwargs:
+            return self.model(kwargs.get("input_ids"), mask=kwargs.get("attention_mask"))
+        
+        return self.model(x)
+
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, max_seq_len):
@@ -106,7 +156,7 @@ class MultiHeadAttention(nn.Module):
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
         self.qkv_proj = nn.Linear(embed_dim, embed_dim * 3, bias=False)
-        self.rotary = RotaryPositionalEmbeddingsCustom(dim=self.head_dim, max_seq_len=max_seq_len)
+        self.rotary = RotaryPositionalEmbeddingsCustom(head_dim=self.head_dim, max_seq_len=max_seq_len)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.dropout = nn.Dropout(0.1)  # Add dropout for regularization
 
@@ -139,33 +189,6 @@ class MultiHeadAttention(nn.Module):
         attn_output = self.out_proj(attn_output)
         return self.dropout(attn_output)
 
-
-class UnifiedTransformerBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads, ffn_hidden_dim, max_seq_len):
-        super().__init__()
-        self.attn_norm = nn.LayerNorm(embed_dim)
-        self.attn = MultiHeadAttention(embed_dim, num_heads, max_seq_len)
-        self.ffn_norm = nn.LayerNorm(embed_dim)
-        self.ffn = SwiGLU(embed_dim, ffn_hidden_dim)
-
-    def forward(self, x, input_pos=None, mask=None):
-        x = x + self.attn(self.attn_norm(x), input_pos=input_pos, mask=mask)
-        x = x + self.ffn(self.ffn_norm(x))
-        return x
-
-class TransformerStack(nn.Module):
-    def __init__(self, num_blocks, embed_dim, num_heads, ffn_hidden_dim, max_seq_len):
-        super().__init__()
-        self.blocks = nn.ModuleList([
-            UnifiedTransformerBlock(embed_dim, num_heads, ffn_hidden_dim, max_seq_len)
-            for _ in range(num_blocks)
-        ])
-        self.norm = nn.LayerNorm(embed_dim)
-
-    def forward(self, x, input_pos=None, mask=None):
-        for block in self.blocks:
-            x = block(x, input_pos=input_pos, mask=mask)
-        return self.norm(x)
 
 class MLM_core(nn.Module):
     def __init__(
@@ -205,28 +228,3 @@ class MLM_core(nn.Module):
 
         return logits
 
-class MLM_model(PreTrainedModel): # HF-facing class name
-    config_class = model_config
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.model = MLM_core(
-            vocab_size=config.vocab_size,
-            embed_dim=config.embed_dim,
-            num_blocks=config.num_blocks,
-            num_heads=config.num_heads,
-            ffn_hidden_dim=config.ffn_hidden_dim,
-            output_dim=config.output_dim,
-            max_seq_len=config.max_seq_len,
-        )
-        self.post_init()  # Initialize weights and apply final processing
-    
-    # if inputs are dictionary
-    def forward(self, x=None, **kwargs):
-        if isinstance(x, (BatchEncoding, Mapping)):
-            return self.model(x.get("input_ids"), mask=x.get("attention_mask"))
-        
-        if "input_ids" in kwargs or "attention_mask" in kwargs:
-            return self.model(kwargs.get("input_ids"), mask=kwargs.get("attention_mask"))
-        
-        return self.model(x)
