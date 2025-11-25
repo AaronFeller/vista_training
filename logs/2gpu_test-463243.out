@@ -1,0 +1,52 @@
+Loading modules...
+Activating venv...
+MASTER_ADDR=c608-081
+MASTER_PORT=29500
+WORLD_SIZE=2
+Launching distributed job via srun...
+Starting training script with world size 2...
+Loading datasets...
+Initializing model...
+Model has 336.67 million parameters.
+No checkpoint found at test_out_2gpu/latest.pt, starting from scratch.
+No checkpoint found at test_out_2gpu/latest.pt, starting from scratch.
+Starting training...
+Epoch 0 | Batch 1/1304705 | Loss: 6.3326
+Epoch 0 | Batch 11/1304705 | Loss: 3.5014
+Epoch 0 | Batch 21/1304705 | Loss: 3.3648
+Epoch 0 | Batch 31/1304705 | Loss: 3.3760
+Epoch 0 | Batch 41/1304705 | Loss: 3.4226
+Epoch 0 | Batch 51/1304705 | Loss: 3.4365
+Epoch 0 | Batch 61/1304705 | Loss: 3.2897
+Epoch 0 | Batch 71/1304705 | Loss: 3.0676
+Epoch 0 | Batch 81/1304705 | Loss: 3.0706
+Epoch 0 | Batch 91/1304705 | Loss: 2.8763
+Epoch 0 | Batch 101/1304705 | Loss: 2.8937
+Epoch 0 | Batch 111/1304705 | Loss: 3.0190
+Epoch 0 | Batch 121/1304705 | Loss: 2.8630
+Epoch 0 | Batch 131/1304705 | Loss: 2.9877
+Epoch 0 | Batch 141/1304705 | Loss: 2.8785
+Epoch 0 | Batch 151/1304705 | Loss: 2.9072
+Epoch 0 | Batch 161/1304705 | Loss: 2.9148
+Epoch 0 | Batch 171/1304705 | Loss: 2.9948
+Epoch 0 | Batch 181/1304705 | Loss: 2.9456
+Epoch 0 | Batch 191/1304705 | Loss: 2.9560
+Epoch 0 | Batch 201/1304705 | Loss: 2.9196
+Epoch 0 | Batch 211/1304705 | Loss: 2.9987
+Epoch 0 | Batch 221/1304705 | Loss: 2.8637
+Epoch 0 | Batch 231/1304705 | Loss: 2.9198
+Epoch 0 | Batch 241/1304705 | Loss: 2.9510
+Epoch 0 | Batch 251/1304705 | Loss: 2.8878
+Epoch 0 | Batch 261/1304705 | Loss: 2.7535
+Epoch 0 | Batch 271/1304705 | Loss: 2.9664
+Epoch 0 | Batch 281/1304705 | Loss: 2.7077
+Epoch 0 | Batch 291/1304705 | Loss: 2.7717
+Epoch 0 | Batch 301/1304705 | Loss: 2.7650
+Epoch 0 | Batch 311/1304705 | Loss: 2.7376
+Epoch 0 | Batch 321/1304705 | Loss: 2.7371
+Epoch 0 | Batch 331/1304705 | Loss: 2.6000
+Epoch 0 | Batch 341/1304705 | Loss: 2.7315
+Epoch 0 | Batch 351/1304705 | Loss: 2.6703
+Epoch 0 | Batch 361/1304705 | Loss: 2.6162
+Epoch 0 | Batch 371/1304705 | Loss: 2.4054
+Epoch 0 | Batch 381/1304705 | Loss: 2.3489

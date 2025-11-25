@@ -1,8 +1,5 @@
 # src/train_mlm.py
-print("Starting training script...")
-
 import os
-import time
 import argparse
 import torch
 import torch.distributed as dist
@@ -80,13 +77,23 @@ def compute_mlm_loss(logits, labels):
     )
 
 def init_distributed():
-    if "RANK" in os.environ:
-        dist.init_process_group(backend="nccl")
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        dist.init_process_group(
+            backend="nccl",
+            rank=rank,
+            world_size=world_size,
+        )
+
+        # VERY IMPORTANT: map this process to its local GPU
+        torch.cuda.set_device(local_rank)
     else:
-        rank, world_size = 0, 1
-    return rank, world_size
+        rank, world_size, local_rank = 0, 1, 0
+
+    return rank, world_size, local_rank
 
 
 def main():
@@ -95,18 +102,17 @@ def main():
     parser.add_argument("--valid_parquet", type=str, required=True)
     parser.add_argument("--tokenizer_name", type=str, default="aaronfeller/PeptideMTR_sm")
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--accumulation_steps", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--output_dir", type=str, default="outputs")
     args = parser.parse_args()
 
-    last_save_time = time.time()
-
-    rank, world_size = init_distributed()
-    device = torch.device("cuda:0")
+    rank, world_size, local_rank = init_distributed()
+    device = torch.device(f"cuda:{local_rank}")
     # print once time from first rank
     if rank == 0:
-        print(f"Starting training at {last_save_time}")
+        print(f"Starting training script with world size {world_size}...")
 
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
     pad_token_id = tokenizer.pad_token_id
@@ -116,7 +122,15 @@ def main():
     if rank == 0:
         print("Loading datasets...")
     train_dataset = SequenceDataset(args.train_parquet)
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if world_size > 1 else None
+    if world_size > 1:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+        )
+    else:
+        sampler = None
 
     train_loader = DataLoader(
         train_dataset,
@@ -129,7 +143,7 @@ def main():
     valid_dataset = SequenceDataset(args.valid_parquet)
     valid_loader = DataLoader(
         valid_dataset,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size*32,
         shuffle=True,
         collate_fn=lambda b: collate_fn(b, pad_token_id, mask_token_id, tokenizer),
     )
@@ -146,7 +160,7 @@ def main():
         print(f"Model has {num_params/1e6:.2f} million parameters.")
 
     if world_size > 1:
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
@@ -178,32 +192,49 @@ def main():
         num_batches = len(train_loader)
         validate_every = max(1, num_batches // 5)   # 20% of the epoch
 
+        # new: set accumulation steps via args (add this to your parser)
+        accumulation_steps = args.accumulation_steps
+
         for batch_idx, batch in enumerate(train_loader):
 
-            ids = batch["input_ids"].to(device)
-            mask = batch["attention_mask"].to(device)
+            ids    = batch["input_ids"].to(device)
+            mask   = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
+            # forward + loss
             logits = model(input_ids=ids, attention_mask=mask)
-            loss = compute_mlm_loss(logits, labels)
+            loss   = compute_mlm_loss(logits, labels)
+            loss   = loss / accumulation_steps   # scale down loss
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            global_step += 1
+            # backward & step logic with accumulation + DDP no_sync
+            if world_size > 1 and accumulation_steps > 1:
+                # if not the last mini-batch of the accumulation block
+                if (batch_idx + 1) % accumulation_steps != 0:
+                    with model.no_sync():
+                        loss.backward()
+                else:
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    global_step += 1
+            else:
+                # no accumulation or single GPU
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                global_step += 1
 
             # ---- Training log every 10 batches ----
             if batch_idx % 10 == 0 and rank == 0:
-                print(f"Epoch {epoch} | Batch {batch_idx+1}/{num_batches} | Loss: {loss.item():.4f}")
+                # multiply back because we scaled loss
+                print(f"Epoch {epoch} | Batch {batch_idx+1}/{num_batches} | Loss: {loss.item()*accumulation_steps:.4f}")
                 with open(log_path, "a") as f:
-                    f.write(f"{epoch},{global_step},{loss.item()},\n")
+                    f.write(f"{epoch},{global_step},{loss.item()*accumulation_steps},\n")
 
             # ====================================================
             #       VALIDATION + CHECKPOINT every 20%
             # ====================================================
             if (batch_idx + 1) % validate_every == 0:
-                # sync all ranks before validation
                 if world_size > 1:
                     dist.barrier()
 
@@ -212,16 +243,15 @@ def main():
                     val_losses = []
 
                     with torch.no_grad():
-                        # only validate on up to 100 batches to save time
                         for i, vbatch in enumerate(valid_loader):
                             if i >= 100:
                                 break
-                            vids = vbatch["input_ids"].to(device)
-                            vmask = vbatch["attention_mask"].to(device)
-                            vlabels = vbatch["labels"].to(device)
+                            vids   = vbatch["input_ids"].to(device)
+                            vmask  = vbatch["attention_mask"].to(device)
+                            vlabels= vbatch["labels"].to(device)
 
                             vlogits = model(input_ids=vids, attention_mask=vmask)
-                            vloss = compute_mlm_loss(vlogits, vlabels)
+                            vloss   = compute_mlm_loss(vlogits, vlabels)
                             val_losses.append(vloss.item())
 
                     mean_vloss = sum(val_losses) / len(val_losses)
@@ -229,12 +259,10 @@ def main():
                     with open(log_path, "a") as f:
                         f.write(f"{epoch},{global_step},,{mean_vloss}\n")
 
-                    # checkpoint at validation time
                     save_checkpoint(rank, model, optimizer, epoch, global_step, args.output_dir)
 
                     model.train()
 
-                # sync again so all ranks leave validation at the same time
                 if world_size > 1:
                     dist.barrier()
 

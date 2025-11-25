@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH -J 2gpu_test
+#SBATCH -J 8gpu_run
 #SBATCH -A MCB24088
-#SBATCH -p gh-dev
-#SBATCH -N 2
+#SBATCH -p gh
+#SBATCH -N 8
 #SBATCH --ntasks-per-node=1
-#SBATCH -t 1:00:00
+#SBATCH -t 48:00:00
 #SBATCH -o logs/%x-%j.out
 #SBATCH -e logs/%x-%j.err
 #SBATCH --mail-type=ALL
@@ -54,8 +54,9 @@ srun --ntasks=$SLURM_NTASKS \
                 --train_parquet data/train/train_smiles.parquet \
                 --valid_parquet data/test/test_smiles.parquet \
                 --tokenizer_name aaronfeller/PeptideMTR_sm \
-                --batch_size 32 \
+                --batch_size 4 \
+                --accumulation_steps 16 \
                 --epochs 5 \
                 --lr 1e-4 \
-                --output_dir test_out_2gpu \
+                --output_dir 8gpu_out \
      '

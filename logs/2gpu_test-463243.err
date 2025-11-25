@@ -1,0 +1,77 @@
+
+Lmod is automatically replacing "nvidia/24.7" with "gcc/15.1.0".
+
+
+Due to MODULEPATH changes, the following have been reloaded:
+  1) openmpi/5.0.5
+
+The following have been reloaded with a version change:
+  1) nvpl/24.7 => nvpl/25.9
+
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+srun: got SIGCONT
+slurmstepd: error: *** JOB 463243 ON c608-081 CANCELLED AT 2025-11-24T21:15:30 ***
+W1124 21:15:30.398000 3270054 torch/distributed/elastic/agent/server/api.py:725] Received 15 death signal, shutting down workers
+srun: forcing job termination
+slurmstepd: error: *** STEP 463243.0 ON c608-081 CANCELLED AT 2025-11-24T21:15:30 ***
+W1124 21:15:30.402000 3270054 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 3270061 closing signal SIGTERM
+W1124 21:15:30.408000 3938991 torch/distributed/elastic/agent/server/api.py:725] Received 15 death signal, shutting down workers
+W1124 21:15:30.415000 3938991 torch/distributed/elastic/multiprocessing/api.py:908] Sending process 3939000 closing signal SIGTERM
+Traceback (most recent call last):
+  File "/scratch/08929/afeller/envs/protein-mlm/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 284, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 717, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 881, in _invoke_run
+    time.sleep(monitor_interval)
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/api.py", line 85, in _terminate_process_handler
+    raise SignalException(f"Process {os.getpid()} got signal: {sigval}", sigval=sigval)
+torch.distributed.elastic.multiprocessing.api.SignalException: Process 3270054 got signal: 15
+Traceback (most recent call last):
+  File "/scratch/08929/afeller/envs/protein-mlm/bin/torchrun", line 7, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 284, in launch_agent
+    result = agent.run()
+             ^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/metrics/api.py", line 138, in wrapper
+    result = f(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 717, in run
+    result = self._invoke_run(role)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/agent/server/api.py", line 881, in _invoke_run
+    time.sleep(monitor_interval)
+  File "/scratch/08929/afeller/envs/protein-mlm/lib/python3.11/site-packages/torch/distributed/elastic/multiprocessing/api.py", line 85, in _terminate_process_handler
+    raise SignalException(f"Process {os.getpid()} got signal: {sigval}", sigval=sigval)
+torch.distributed.elastic.multiprocessing.api.SignalException: Process 3938991 got signal: 15
+srun: error: c608-082: task 1: Exited with exit code 1
+srun: error: c608-081: task 0: Exited with exit code 1
