@@ -5,6 +5,80 @@ from transformers import PreTrainedModel
 from typing import Mapping
 from transformers.tokenization_utils_base import BatchEncoding
 from transformers import PretrainedConfig
+import lightning as L
+
+class MLMLitModule(L.LightningModule):
+    def __init__(self, tokenizer, lr=1e-4, warmup_steps=1000):
+        super().__init__()
+        self.save_hyperparameters(ignore=["tokenizer"])
+        self.tokenizer = tokenizer
+        config = model_config(vocab_size=tokenizer.vocab_size)
+        self.model = MLM_model(config)
+
+    def compute_mlm_loss(self, logits, labels):
+        vocab = logits.size(-1)
+        return F.cross_entropy(
+            logits.view(-1, vocab),
+            labels.view(-1),
+            ignore_index=-100
+        )
+
+    def training_step(self, batch, batch_idx):
+        ids = batch["input_ids"]
+        mask = batch["attention_mask"]
+        labels = batch["labels"]
+
+        logits = self.model(ids, mask)
+        loss = self.compute_mlm_loss(logits, labels)
+
+        self.log(
+            "train_loss", 
+            loss, 
+            prog_bar=True,
+            on_step=True,
+            on_epoch=True,
+            sync_dist=True
+        )
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        ids = batch["input_ids"]
+        mask = batch["attention_mask"]
+        labels = batch["labels"]
+
+        logits = self.model(ids, mask)
+        loss = self.compute_mlm_loss(logits, labels)
+        self.log(
+            "valid_loss",
+            loss,
+            prog_bar=True,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=True
+        )
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+
+        # ---- Warmup Function ----
+        def lr_lambda(step):
+            warmup = self.hparams.warmup_steps
+            if step < warmup:
+                return float(step) / float(max(1, warmup))
+            return 1.0  # constant LR after warmup (you can change this)
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
+
 
 class model_config(PretrainedConfig):
     model_type = "MLM_model"

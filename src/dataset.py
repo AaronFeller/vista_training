@@ -5,6 +5,52 @@ import torch
 import pandas as pd
 import numpy as np
 from rdkit import Chem
+from torch.utils.data import DataLoader
+import lightning as L
+
+class MLMDataModule(L.LightningDataModule):
+    def __init__(self, train_path, valid_path, tokenizer, batch_size, mask_token_id, pad_token_id):
+        super().__init__()
+        self.train_path = train_path
+        self.valid_path = valid_path
+        self.tokenizer = tokenizer
+        self.batch_size = batch_size
+        self.pad_token_id = pad_token_id
+        self.mask_token_id = mask_token_id
+
+    def setup(self, stage=None):
+        self.train_dataset = SequenceDataset(self.train_path)
+        self.valid_dataset = SequenceDataset(self.valid_path)
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
+            collate_fn=lambda b: collate_fn(
+                b,
+                self.pad_token_id,
+                self.mask_token_id,
+                self.tokenizer,
+            ),
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.valid_dataset,
+            batch_size=self.batch_size * 4,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+            collate_fn=lambda b: collate_fn(
+                b,
+                self.pad_token_id,
+                self.mask_token_id,
+                self.tokenizer,
+            ),
+        )
 
 class SequenceDataset(Dataset):
     def __init__(self, parquet_path):
@@ -57,7 +103,20 @@ def apply_span_masking(
     return masked_input_ids, labels
 
 
-def collate_fn(batch, pad_token_id, mask_token_id, tokenizer):
+def random_token_truncation(input_ids, attention_mask, max_length=512):
+    length = input_ids.shape[0]
+
+    if length <= max_length:
+        return input_ids, attention_mask
+
+    # choose random section to use
+    start_idx = np.random.randint(0, length - max_length + 1)
+    input_ids = input_ids[start_idx : start_idx + max_length]
+    attention_mask = attention_mask[start_idx : start_idx + max_length]
+
+    return input_ids, attention_mask
+
+def collate_fn(batch, pad_token_id, mask_token_id, tokenizer, max_length=512):
     # ----------------------------------------
     # RDKit randomization
     # ----------------------------------------
@@ -76,14 +135,27 @@ def collate_fn(batch, pad_token_id, mask_token_id, tokenizer):
     tokens = tokenizer(
         randomized,
         return_tensors="pt",
-        padding=True,
-        truncation=True,
+        padding=False,
+        truncation=False,
         add_special_tokens=True,
-        max_length=2048,
+        max_length=204800,  # effectively no truncation at this step
     )
 
     input_ids = tokens["input_ids"]
     attention_mask = tokens["attention_mask"]
+
+    # ----------------------------------------
+    # Random truncation to max_length (512)
+    # ----------------------------------------
+    input_ids, attention_mask = random_token_truncation(input_ids, attention_mask, max_length=max_length)
+
+    # ----------------------------------------
+    # pad to max_length
+    # ----------------------------------------
+    pad_len = max_length - input_ids.shape[0]
+    if pad_len > 0:
+        input_ids = torch.cat([input_ids, torch.full((pad_len,), pad_token_id)])
+        attention_mask = torch.cat([attention_mask, torch.zeros(pad_len)])
 
     # ----------------------------------------
     # Apply span masking
@@ -93,6 +165,7 @@ def collate_fn(batch, pad_token_id, mask_token_id, tokenizer):
         attention_mask,
         pad_token_id,
         mask_token_id,
+        max_length=max_length,
     )
 
     return {
